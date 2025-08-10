@@ -55,6 +55,7 @@ llm = ChatOpenAI(
     openai_api_key=" "  # Replace with your actual OpenAI API key
 )
 
+
 from langchain_community.document_loaders import WebBaseLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import SentenceTransformerEmbeddings

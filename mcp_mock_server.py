@@ -120,6 +120,7 @@ thread.start()
 
 from pyngrok import ngrok
 
+
 # 5005 portunu aç
 public_url = ngrok.connect(5005)
 print("MCP test server public URL:", public_url)

@@ -585,5 +585,4 @@ print(response)
 
 ask_agent("What is 5G?", thread_id="unique_thread_id_1")
 
-!kill ngrok
 
