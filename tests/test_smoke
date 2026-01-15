@@ -1,0 +1,3 @@
+def test_smoke_import():
+    import vfa
+    assert vfa is not None
