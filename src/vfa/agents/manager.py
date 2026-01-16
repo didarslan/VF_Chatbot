@@ -1,124 +1,159 @@
-import re
-from vfa.core.schemas import ManagerResult, Intent, ToolLog
-from vfa.core.logging import timer_ms
-from vfa.services.safety_service import looks_like_prompt_injection, redact_msisdn
-from vfa.agents.policy_agent import PolicyAgent
-from vfa.agents.knowledge_agent import KnowledgeAgent
-from vfa.agents.device_agent import DeviceAgent
-from vfa.agents.order_agent import OrderAgent
-from vfa.services.rag_service import RAGService
+from __future__ import annotations
 
-_MSISDN_RE = re.compile(r"\b(90)?5\d{9}\b")
-_URL_RE = re.compile(r"https?://\S+")
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel
+
+from vfa.services.intent_service import analyze_intent
+from vfa.services.state_store import get_state, set_state
+from vfa.services.slot_service import extract_slots
+from vfa.services.vector_store_factory import get_vectorstore
+from vfa.tools.phone_catalog import find_device_url_in_candidates
+
+from vfa.agents.device_agent import DeviceAgent
+from vfa.agents.knowledge_agent import KnowledgeAgent
+from vfa.agents.order_agent import OrderAgent
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    actions: List[Dict[str, Any]] = []
+    state: Dict[str, Any] = {}
+    debug: Optional[Dict[str, Any]] = None
+
 
 class ManagerAgent:
+    """
+    High-level orchestrator:
+    - Intent + Slot + State based routing
+    - Prevents repeated candidate listing
+    - Runs: KnowledgeAgent (RAG), DeviceAgent (catalog), OrderAgent (mock order + optional sms)
+    """
+
     def __init__(self):
-        self.policy = PolicyAgent()
-        self.rag = RAGService()
-        self.knowledge = KnowledgeAgent(self.rag)
-        self.device = DeviceAgent()
-        self.order = OrderAgent()
+        self.device_agent = DeviceAgent()
+        vectorstore = get_vectorstore()
+        self.knowledge_agent = KnowledgeAgent(rag=vectorstore)
+        self.order_agent = OrderAgent()
 
-    def infer_intent(self, msg: str) -> Intent:
-        t = msg.lower()
-        if any(k in t for k in ["sipariş", "satın al", "faturaya ek", "order", "sepete"]):
-            return "ORDER"
-        if any(k in t for k in ["5g uyumlu", "5g telefon", "telefon öner", "cihaz öner", "iphone", "samsung", "xiaomi", "oppo", "huawei", "karşılaştır"]):
-            return "DEVICE"
-        if any(k in t for k in ["5g", "kapsama", "hız testi", "yardım", "sss", "internet"]):
-            return "KNOWLEDGE"
-        return "OTHER"
+    def handle(self, thread_id: str, message: str) -> ChatResponse:
+        st = get_state(thread_id)
 
-    def _extract_msisdn(self, msg: str):
-        m = _MSISDN_RE.search(msg.replace(" ", ""))
-        return m.group(0) if m else None
+        # 1) Slot update (user can provide these at any time)
+        slots = extract_slots(message)
+        updates: Dict[str, Any] = {}
+        if slots.get("installment"):
+            updates["installment"] = slots["installment"]
+        if slots.get("city"):
+            updates["city"] = slots["city"]
+        if slots.get("msisdn"):
+            updates["msisdn"] = slots["msisdn"]
 
-    def _extract_urls(self, msg: str):
-        return _URL_RE.findall(msg)
+        if updates:
+            st = set_state(thread_id, **updates)
 
-    def _extract_installment(self, msg: str):
-        # "12 ay", "12" gibi
-        m = re.search(r"(\d{1,2})\s*ay", msg.lower())
-        if m:
-            return int(m.group(1))
-        m2 = re.search(r"\b(3|6|9|12|18|24)\b", msg)
-        return int(m2.group(1)) if m2 else None
+        # 2) Intent analysis (LLM / heuristic)
+        intent = analyze_intent(message)
 
-    def handle(self, thread_id: str, message: str) -> ManagerResult:
-        safe_msg = redact_msisdn(message)
+        # 3) State-aware intent override (fix repeated listing issue)
+        msg_l = message.lower()
+        orderish = any(k in msg_l for k in ["almak istiyorum", "satın", "sipariş", "faturaya ek", "order", "sepete"])
+        matched_url: Optional[str] = None
 
-        if looks_like_prompt_injection(message):
-            return ManagerResult(
-                intent="OTHER",
-                message="Güvenlik nedeniyle bu isteği işleyemiyorum. Lütfen talebinizi Vodafone 5G veya cihaz/sipariş konularında yeniden iletir misiniz?"
+        if st.get("last_candidates"):
+            matched_url = find_device_url_in_candidates(message, st.get("last_candidates", []))
+
+        # Eğer agent discovery döndürüyor ama aslında kullanıcı seçim yapıyorsa override et
+        if intent.intent == "DEVICE_DISCOVERY" and (matched_url or orderish):
+            intent.intent = "DEVICE_SELECTION"
+            intent.selected_model = intent.selected_model or message
+
+        # Ayrıca LLM "OTHER" dese bile, aday listesi varken model seçimi varsa selection'a çek
+        if intent.intent in ["OTHER", "UNKNOWN", "GENERAL"] and (matched_url or orderish) and st.get("last_candidates"):
+            intent.intent = "DEVICE_SELECTION"
+            intent.selected_model = intent.selected_model or message
+
+        # 4) Routing
+        if intent.intent == "KNOWLEDGE_5G":
+            ans = self.knowledge_agent.answer(message, thread_id)
+            return ChatResponse(
+                answer=ans,
+                actions=[{"type": "ANSWER_5G"}],
+                state=st,
+                debug={"intent": intent.model_dump()},
             )
 
-        intent = self.infer_intent(message)
-        allow = self.policy.allowed(intent)
+        if intent.intent == "DEVICE_DISCOVERY":
+            result = self.device_agent.suggest_5g_phones(message, thread_id)
+            st = set_state(thread_id, stage="DISCOVERY", last_candidates=result.get("candidates", []))
+            return ChatResponse(
+                answer=result["answer"],
+                actions=[{"type": "SHOW_CANDIDATES", "count": len(st.get("last_candidates", []))}],
+                state=st,
+                debug={"intent": intent.model_dump()},
+            )
 
-        logs: list[ToolLog] = []
+        if intent.intent in ["DEVICE_SELECTION", "ORDER_CREATE"]:
+            model = intent.selected_model or message
 
-        # DEVICE
-        if intent == "DEVICE" and "device_agent" in allow["agents"]:
-            urls = self._extract_urls(message)
-            if len(urls) >= 2:
-                with timer_ms() as t:
-                    out = self.device.compare(urls[0], urls[1])
-                    logs.append(ToolLog(tool="phone_catalog.compare", input={"a": urls[0], "b": urls[1]}, output={"ok": True}, latency_ms=t()))
-                return ManagerResult(intent=intent, message="Karşılaştırma sonucu aşağıdadır.", data=out, tool_logs=logs)
+            # URL resolution priority: existing selected_url -> matched_url from message -> candidates lookup
+            url = st.get("selected_url") or matched_url
+            if not url:
+                url = find_device_url_in_candidates(model, st.get("last_candidates", []))
 
-            if len(urls) == 1:
-                with timer_ms() as t:
-                    out = self.device.get_purchase_options(urls[0])
-                    logs.append(ToolLog(tool="phone_catalog.lookup", input={"url": urls[0]}, output={"ok": True}, latency_ms=t()))
-                return ManagerResult(
-                    intent=intent,
-                    message="Ürün detaylarını ve satın alma bilgilerini aşağıda bulabilirsiniz.",
-                    data=out,
-                    tool_logs=logs
+            # URL bulunamadıysa tekrar discovery'ye dön (ama aynı listeyi basmak yerine yönlendir)
+            if not url:
+                return ChatResponse(
+                    answer=(
+                        "Seçtiğiniz modeli katalog listesinde netleştiremedim.\n"
+                        "Lütfen listeden model adını aynen yazar mısınız? (Örn: “Samsung Galaxy S25 FE 5G”)"
+                    ),
+                    actions=[{"type": "ASK_RESELECT"}],
+                    state=st,
+                    debug={"intent": intent.model_dump(), "note": "url_not_found"},
                 )
 
-            # "5G uyumlu telefon bul"
-            with timer_ms() as t:
-                out = self.device.find_5g_phones(limit=25)
-                logs.append(ToolLog(tool="phone_catalog.discover_product_urls+lookup", input={"catalog": "faturaya-ek/telefonlar"}, output={"ok": True}, latency_ms=t()))
-            return ManagerResult(intent=intent, message=out.get("message",""), data=out, tool_logs=logs)
+            st = set_state(thread_id, stage="SELECTION", selected_model=model, selected_url=url)
 
-        # KNOWLEDGE
-        if intent == "KNOWLEDGE" and "knowledge_agent" in allow["agents"]:
-            with timer_ms() as t:
-                out = self.knowledge.answer(message)
-                logs.append(ToolLog(tool="rag.answer", input={"q": safe_msg}, output={"ok": True}, latency_ms=t()))
-            msg = out["answer"]
-            if out.get("sources"):
-                msg += "\n\nKaynaklar:\n" + "\n".join(out["sources"][:4])
-            return ManagerResult(intent=intent, message=msg, data=out, tool_logs=logs)
+            # Missing slots for order
+            missing: List[str] = []
+            if not st.get("installment"):
+                missing.append("taksit (12/24/36)")
+            if not st.get("city"):
+                missing.append("teslimat ili")
 
-        # ORDER
-        if intent == "ORDER" and "order_agent" in allow["agents"]:
-            msisdn = self._extract_msisdn(message)
-            urls = self._extract_urls(message)
-            installment = self._extract_installment(message)
+            if missing:
+                return ChatResponse(
+                    answer=(
+                        f"Seçiminizi aldım: **{model}**.\n"
+                        f"Sipariş oluşturabilmem için eksik bilgiler var: {', '.join(missing)}.\n"
+                        "Örn: `24 ay, İstanbul`"
+                    ),
+                    actions=[{"type": "ASK_SLOTS", "missing": missing, "selected_url": url}],
+                    state=st,
+                    debug={"intent": intent.model_dump()},
+                )
 
-            if not msisdn:
-                return ManagerResult(intent=intent, message="Sipariş oluşturabilmem için telefon numaranızı (5XXXXXXXXX) paylaşır mısınız?")
+            # All set -> create order
+            order_res = self.order_agent.create_order(thread_id=thread_id, state=st)
+            st = set_state(thread_id, stage="ORDER", last_order=order_res)
 
-            if not urls:
-                return ManagerResult(intent=intent, message="Sipariş için ürün linkini paylaşır mısınız? (Vodafone ürün sayfası URL’si)")
+            return ChatResponse(
+                answer=(
+                    "Siparişiniz oluşturuldu ✅\n"
+                    f"Order ID: **{order_res['order_id']}**\n"
+                    f"Ürün: **{st.get('selected_model')}**\n"
+                    f"Taksit: **{st.get('installment')} ay** | İl: **{st.get('city')}**"
+                ),
+                actions=[{"type": "CREATE_ORDER", "order_id": order_res["order_id"], "selected_url": st.get("selected_url")}],
+                state=st,
+                debug={"intent": intent.model_dump()},
+            )
 
-            # ürün adını lookup ile çıkar
-            from vfa.tools.phone_catalog import lookup
-            with timer_ms() as t1:
-                p = lookup(urls[0])
-                logs.append(ToolLog(tool="phone_catalog.lookup", input={"url": urls[0]}, output={"ok": True}, latency_ms=t1()))
-
-            if installment is None:
-                return ManagerResult(intent=intent, message="Kaç ay taksit istersiniz? (Örn: 6 ay / 12 ay)")
-
-            with timer_ms() as t2:
-                out = self.order.create_order_flow(msisdn=msisdn, product_url=urls[0], product_name=p.name, installment_months=installment)
-                logs.append(ToolLog(tool="order_mock.create_order+sms_mock.send_sms", input={"msisdn": "masked", "months": installment}, output={"ok": True}, latency_ms=t2()))
-
-            return ManagerResult(intent=intent, message="Siparişiniz oluşturuldu ve bilgilendirme SMS’i gönderildi (mock).", data=out, tool_logs=logs)
-
-        return ManagerResult(intent=intent, message="Bu konuda yardımcı olabilmem için talebinizi 5G, cihaz veya sipariş kapsamında biraz daha detaylandırır mısınız?")
+        # Default
+        return ChatResponse(
+            answer="Daha iyi yardımcı olabilmem için biraz daha detay paylaşır mısınız?",
+            actions=[{"type": "ASK_CLARIFY"}],
+            state=st,
+            debug={"intent": intent.model_dump()},
+        )

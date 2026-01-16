@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from vfa.services.scraper_service import fetch_html
 from vfa.services.parser_service import html_to_text
 

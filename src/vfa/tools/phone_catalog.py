@@ -1,33 +1,50 @@
+from __future__ import annotations
 import re
 from typing import List, Optional
 from bs4 import BeautifulSoup
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+from typing import Dict
 from vfa.core.config import settings
 from vfa.core.schemas import ProductSummary
 from vfa.core.prompts import DEVICE_SYSTEM
 from vfa.services.scraper_service import fetch_html
 from vfa.services.parser_service import html_to_text
 
+
 class _ExtractedProduct(BaseModel):
     name: str = Field(..., description="Ürün adı")
-    price_text: str = Field("", description="Fiyat veya ödeme bilgisi metni")
-    installment_text: str = Field("", description="Taksit bilgisi metni")
+    price_text: str = Field("", description="Fiyat / ödeme metni")
+    installment_text: str = Field("", description="Taksit metni")
     highlights: List[str] = Field(default_factory=list, description="Öne çıkanlar")
-    is_5g: Optional[bool] = Field(None, description="5G uyum sinyali")
+    is_5g: Optional[bool] = Field(None, description="5G sinyali")
+
 
 _llm = ChatOpenAI(
     model=settings.openai_model,
-    api_key=settings.openai_api_key,
     temperature=0.0,
-    use_responses_api=True,
-    output_version="responses/v1",
+    openai_api_key=settings.openai_api_key,
 )
+
+def _norm(s: str) -> str:
+    s = s.lower()
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"[^\w\s]", "", s)  # noktalama temizle
+    return s
+
+def find_device_url_in_candidates(model_text: str, candidates: List[Dict[str, str]]) -> Optional[str]:
+    mt = _norm(model_text)
+    for c in candidates:
+        name = _norm(c.get("name", ""))
+        if name and name in mt:
+            return c.get("url")
+    return None
 
 def discover_product_urls(catalog_url: str, limit: int = 50) -> List[str]:
     html = fetch_html(catalog_url)
     soup = BeautifulSoup(html, "html.parser")
-    urls = []
+    urls: List[str] = []
+
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if "/faturaya-ek/" in href and "/p/telefonlar" in href:
@@ -37,6 +54,7 @@ def discover_product_urls(catalog_url: str, limit: int = 50) -> List[str]:
                 urls.append(href)
         if len(urls) >= limit:
             break
+
     return urls
 
 def _heuristic_is_5g(text: str) -> Optional[bool]:
@@ -45,44 +63,33 @@ def _heuristic_is_5g(text: str) -> Optional[bool]:
         return True
     return None
 
-def lookup(url: str) -> ProductSummary:
-    html = fetch_html(url)
+def get_product_summary(product_url: str) -> ProductSummary:
+    html = fetch_html(product_url)
     text = html_to_text(html)
 
+    # structured extraction (clean + controllable)
     structured = _llm.with_structured_output(_ExtractedProduct)
     prompt = f"""{DEVICE_SYSTEM}
 
 Sayfa metni (kısaltılmış):
-{text[:16000]}
+{text[:14000]}
 
 Yapılandırılmış ürün özetini çıkar."""
     p: _ExtractedProduct = structured.invoke(prompt)
 
-    # Heuristic fallback for 5G
     if p.is_5g is None:
         p.is_5g = _heuristic_is_5g(text)
 
     return ProductSummary(
         name=p.name,
+        source_url=product_url,
+        is_5g=p.is_5g,
         price_text=p.price_text,
         installment_text=p.installment_text,
         highlights=p.highlights,
-        is_5g=p.is_5g,
-        source_url=url,
     )
 
-def compare(url_a: str, url_b: str) -> dict:
-    a = lookup(url_a)
-    b = lookup(url_b)
+def compare_products(url_a: str, url_b: str) -> dict:
+    a = get_product_summary(url_a)
+    b = get_product_summary(url_b)
     return {"a": a.model_dump(), "b": b.model_dump()}
-
-def extract_price_number(price_text: str) -> Optional[float]:
-    # çok basit: 12.345,67 gibi TR format
-    m = re.search(r"(\d{1,3}(\.\d{3})*(,\d{2})?)", price_text)
-    if not m:
-        return None
-    s = m.group(1).replace(".", "").replace(",", ".")
-    try:
-        return float(s)
-    except:
-        return None

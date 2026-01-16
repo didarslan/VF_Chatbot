@@ -1,10 +1,22 @@
-import re
+from __future__ import annotations
 
-def redact_msisdn(text: str) -> str:
-    # basit maskeleme: 90 ile başlayan 10-12 haneler
-    return re.sub(r"\b(90)?5\d{9}\b", "5*********", text)
+import re
+from urllib.parse import urlparse
+from vfa.core.constants import ALLOWED_DOMAINS
+
+_MSISDN_RE = re.compile(r"\b(90)?5\d{9}\b")
+
+def mask_msisdn(text: str) -> str:
+    return _MSISDN_RE.sub("5*********", text)
+
+def is_allowed_url(url: str) -> bool:
+    try:
+        host = urlparse(url).netloc
+        return host in ALLOWED_DOMAINS
+    except Exception:
+        return False
 
 def looks_like_prompt_injection(text: str) -> bool:
     t = text.lower()
-    risky = ["ignore previous", "system prompt", "developer message", "tool output", "jailbreak"]
-    return any(x in t for x in risky)
+    bad = ["ignore previous", "system prompt", "developer message", "jailbreak", "tool output"]
+    return any(x in t for x in bad)

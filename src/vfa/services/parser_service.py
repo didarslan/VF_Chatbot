@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from bs4 import BeautifulSoup
 import html2text
 
@@ -10,5 +12,6 @@ def html_to_text(html: str) -> str:
     h.ignore_images = True
     h.ignore_links = False
     text = h.handle(str(soup))
+
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return "\n".join(lines)

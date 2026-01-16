@@ -196,3 +196,4 @@ SEED_URLS = [
 ]
 
 CATALOG_URL = "https://www.vodafone.com.tr/faturaya-ek/telefonlar"
+ALLOWED_DOMAINS = {"www.vodafone.com.tr"}

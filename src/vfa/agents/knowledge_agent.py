@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from vfa.services.rag_service import RAGService
 
 class KnowledgeAgent:
