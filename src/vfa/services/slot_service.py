@@ -1,22 +1,52 @@
+# src/vfa/services/slot_service.py
 from __future__ import annotations
 import re
-from typing import Optional, Dict
+from typing import Any, Dict, Optional
 
-TR_CITIES = ["istanbul", "ankara", "izmir", "bursa", "antalya"]  # istersen genişlet
+ALLOWED_INSTALLMENTS = {3, 6, 12, 24, 36}
 
-def extract_installment(text: str) -> Optional[int]:
-    m = re.search(r"\b(12|24|36)\s*(ay|taksit)?\b", text.lower())
-    return int(m.group(1)) if m else None
+CITY_ALIASES = {
+    "istanbul": "İstanbul",
+    "ankara": "Ankara",
+    "izmir": "İzmir",
+    # istersen genişletirsin
+}
 
-def extract_city(text: str) -> Optional[str]:
+def _extract_installment(text: str) -> Optional[int]:
     t = text.lower()
-    for c in TR_CITIES:
-        if re.search(rf"\b{re.escape(c)}\b", t):
-            return c.title()
+
+    # 1) "3 taksit" / "3 ay"
+    m = re.search(r"\b(\d{1,2})\s*(taksit|ay)\b", t)
+    if not m:
+        # 2) "taksit 3"
+        m = re.search(r"\b(taksit|ay)\s*(\d{1,2})\b", t)
+
+    if not m:
+        return None
+
+    # gruplardan sayıyı al
+    num = None
+    for g in m.groups():
+        if g and g.isdigit():
+            num = int(g)
+            break
+
+    if num in ALLOWED_INSTALLMENTS:
+        return num
     return None
 
-def extract_slots(text: str) -> Dict[str, Optional[object]]:
+def _extract_city(text: str) -> Optional[str]:
+    t = text.lower()
+    for key, pretty in CITY_ALIASES.items():
+        # ankara, ankaradan, ankara'dan, ankaraya...
+        if re.search(rf"\b{re.escape(key)}\w*\b", t):
+            return pretty
+    return None
+
+def extract_slots(message: str) -> Dict[str, Any]:
     return {
-        "installment": extract_installment(text),
-        "city": extract_city(text),
+        "installment": _extract_installment(message),
+        "city": _extract_city(message),
+        # msisdn (opsiyonel) istersen ekle:
+        # "msisdn": _extract_msisdn(message),
     }

@@ -17,10 +17,14 @@ src/vfa/core/schemas.py
 src/vfa/eval/metrics.py
 src/vfa/eval/rubics.py
 src/vfa/services/ingestion_service.py
+src/vfa/services/intent_service.py
 src/vfa/services/parser_service.py
 src/vfa/services/rag_service.py
+src/vfa/services/response_composer.py
 src/vfa/services/safety_service.py
 src/vfa/services/scraper_service.py
+src/vfa/services/slot_service.py
+src/vfa/services/state_store.py
 src/vfa/services/tracing_service.py
 src/vfa/services/vector_store_factory.py
 src/vfa/tools/__init__.py
