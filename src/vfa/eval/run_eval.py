@@ -1,16 +1,18 @@
-# src/vfa/eval/run_eval.py
 import argparse
-import concurrent.futures
 import json
+import multiprocessing as mp
 import os
 import time
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, List, Optional
 
-from . import metrics, rubics
+from dotenv import load_dotenv
 
-from vfa.agents.manager import ManagerAgent
+_ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
+load_dotenv(dotenv_path=_ENV_PATH)
+
+from . import metrics, rubics
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -48,6 +50,25 @@ def normalize_handle_output(res: Any) -> Dict[str, Any]:
     return {"answer": str(res), "raw": repr(res), "actions": [], "state": {}, "debug": {}}
 
 
+def _run_handle_in_proc(tid: str, q: str, out_q: "mp.Queue") -> None:
+    try:
+        from vfa.agents.manager import ManagerAgent
+        agent = ManagerAgent()
+        res = agent.handle(str(tid), q)
+        if hasattr(res, "model_dump"):
+            payload = res.model_dump()
+        elif hasattr(res, "dict"):
+            payload = res.dict()
+        elif isinstance(res, dict):
+            payload = res
+        else:
+            payload = {"answer": str(res), "raw": repr(res)}
+        out_q.put(("ok", payload))
+    except Exception as e:
+        import traceback
+        out_q.put(("err", f"{type(e).__name__}: {e}\n{traceback.format_exc()}"))
+
+
 def percentile(values: List[float], p: float) -> Optional[float]:
     if not values:
         return None
@@ -65,10 +86,20 @@ def main():
     ap.add_argument("--dataset", required=True, help="jsonl dataset path")
     ap.add_argument("--out", required=True, help="output directory")
     ap.add_argument("--limit", type=int, default=0, help="optional limit")
-    ap.add_argument("--timeout_s", type=int, default=15, help="per-sample timeout seconds")
+    ap.add_argument(
+        "--timeout_s",
+        type=int,
+        default=int(os.getenv("EVAL_TIMEOUT_S", "60")),
+        help="per-sample timeout seconds",
+    )
     ap.add_argument("--no_judge", action="store_true", help="disable LLM-judge rubric scoring")
     ap.add_argument("--print_every", type=int, default=1, help="progress print frequency")
-    ap.add_argument("--sleep_s", type=float, default=0.0, help="sleep between samples")
+    ap.add_argument(
+        "--sleep_s",
+        type=float,
+        default=float(os.getenv("EVAL_SLEEP_S", "0.0")),
+        help="sleep between samples",
+    )
     args = ap.parse_args()
 
     dataset_path = Path(args.dataset)
@@ -90,7 +121,6 @@ def main():
 
     print("Loaded N:", len(data))
 
-    agent = ManagerAgent()
     results: List[Dict[str, Any]] = []
 
     for i, ex in enumerate(data):
@@ -110,12 +140,25 @@ def main():
 
         t0 = time.perf_counter()
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(agent.handle, str(tid), q)
-                res = fut.result(timeout=args.timeout_s)
-            pred = normalize_handle_output(res)
-        except concurrent.futures.TimeoutError:
-            err = f"TimeoutError: handle() exceeded {args.timeout_s}s"
+            ctx = mp.get_context("spawn")
+            out_q: mp.Queue = ctx.Queue()
+            p = ctx.Process(target=_run_handle_in_proc, args=(str(tid), q, out_q))
+            p.start()
+            p.join(timeout=args.timeout_s)
+            if p.is_alive():
+                p.terminate()
+                p.join()
+                err = f"TimeoutError: handle() exceeded {args.timeout_s}s"
+            else:
+                try:
+                    status, payload = out_q.get(timeout=1.0)
+                except Exception:
+                    code = p.exitcode
+                    status, payload = ("err", f"Worker exited without result (exitcode={code})")
+                if status == "ok":
+                    pred = normalize_handle_output(payload)
+                else:
+                    err = payload
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
 
@@ -212,5 +255,6 @@ def main():
 
 
 if __name__ == "__main__":
+    mp.freeze_support()
     main()
 

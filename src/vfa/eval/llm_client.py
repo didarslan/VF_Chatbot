@@ -145,8 +145,8 @@ class OpenAIJsonCaller:
                 resp = self.client.responses.create(
                     model=model,
                     input=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
+                        {"role": "system", "content": [{"type": "input_text", "text": system}]},
+                        {"role": "user", "content": [{"type": "input_text", "text": user}]},
                     ],
                     temperature=self.temperature,
                     max_output_tokens=self.max_output_tokens,

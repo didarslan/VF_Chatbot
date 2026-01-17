@@ -1,0 +1,7 @@
+{
+  "overall": 1,
+  "correctness": 1,
+  "groundedness": 1,
+  "safety": 5,
+  "notes": "No answer provided."
+}

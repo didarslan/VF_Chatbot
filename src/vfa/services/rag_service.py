@@ -11,11 +11,15 @@ from vfa.services.llm_factory import make_chat_llm, paced_invoke
 class RAGService:
     def __init__(self):
         self.vs = get_vectorstore()
-        self.llm = make_chat_llm(model=settings.model, temperature=0.6)
+        self.llm = make_chat_llm(model=settings.openai_model, temperature=0.6)
 
     def retrieve(self, query: str, k: int = 4) -> List[Document]:
         retriever = self.vs.as_retriever(search_kwargs={"k": k})
-        return retriever.get_relevant_documents(query)
+        if hasattr(retriever, "get_relevant_documents"):
+            return retriever.get_relevant_documents(query)
+        if hasattr(retriever, "invoke"):
+            return retriever.invoke(query)
+        return retriever._get_relevant_documents(query)
 
     def answer(self, question: str) -> Tuple[str, List[str]]:
         docs = self.retrieve(question, k=4)

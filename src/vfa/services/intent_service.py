@@ -2,10 +2,8 @@
 
 from typing import List, Optional, Literal
 from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
 
-from vfa.core.config import settings
-from vfa.services.llm_factory import make_chat_llm, paced_invoke
+from vfa.services.llm_factory import make_chat_llm, paced_invoke, is_llm_disabled, is_quota_error
 
 IntentType = Literal[
     "DEVICE_DISCOVERY",
@@ -15,7 +13,6 @@ IntentType = Literal[
     "KNOWLEDGE_5G",
     "OTHER",
 ]
-
 
 class IntentResult(BaseModel):
     intent: IntentType
@@ -48,12 +45,19 @@ Return JSON only.
 
 
 def analyze_intent(user_text: str) -> IntentResult:
-    # 1. Mesaj listesini oluÅŸturun
+    if is_llm_disabled():
+        return IntentResult(intent="OTHER", confidence=0.0)
+
+    # 1. Mesaj listesini olusturun
     messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": user_text},
     ]
-    return paced_invoke(_llm, messages)
-
-
+    chain = _llm.with_structured_output(IntentResult)
+    try:
+        return paced_invoke(chain, messages)
+    except Exception as e:
+        if is_quota_error(e) or "llm disabled" in str(e).lower():
+            return IntentResult(intent="OTHER", confidence=0.0)
+        raise
 

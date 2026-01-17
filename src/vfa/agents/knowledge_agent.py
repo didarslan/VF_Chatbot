@@ -8,7 +8,7 @@ class KnowledgeAgent:
         self.rag_enabled = os.getenv("RAG_ENABLED", "1") == "1"
         self.topk = int(os.getenv("RAG_TOPK", "5"))
 
-    def answer(self, question: str) -> dict:
+    def answer(self, question: str, *_args, **_kwargs) -> dict:
         answer, sources = self.rag.answer(question)
         return {"answer": answer, "sources": sources}
 

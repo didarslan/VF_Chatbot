@@ -113,3 +113,10 @@ def paced_invoke(runnable, inp):
             break
 
     raise RuntimeError(f"LLM call failed after retries: {type(last_err).__name__}: {last_err}")
+
+def is_quota_error(e: Exception) -> bool:
+    s = str(e).lower()
+    return ("insufficient_quota" in s) or ("check your plan and billing" in s)
+
+def is_llm_disabled() -> bool:
+    return os.getenv("LLM_ENABLED", "1") != "1"

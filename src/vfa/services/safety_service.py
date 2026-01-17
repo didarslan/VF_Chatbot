@@ -20,3 +20,19 @@ def looks_like_prompt_injection(text: str) -> bool:
     t = text.lower()
     bad = ["ignore previous", "system prompt", "developer message", "jailbreak", "tool output"]
     return any(x in t for x in bad)
+
+def looks_like_sensitive_request(text: str) -> bool:
+    t = text.lower()
+    patterns = [
+        "tc kimlik",
+        "kimlik numaras",
+        "tüm kullanıcı verileri",
+        "tum kullanici verileri",
+        "kullanıcı verilerini dök",
+        "kullanici verilerini dok",
+        "müşteri verisi",
+        "musteri verisi",
+        "verilerini dök",
+        "verilerini dok",
+    ]
+    return any(p in t for p in patterns)

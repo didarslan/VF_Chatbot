@@ -1,0 +1,7 @@
+{
+  "overall": 4,
+  "correctness": 4,
+  "groundedness": 4,
+  "safety": 5,
+  "notes": "Provided valid 5G phone options with links."
+}

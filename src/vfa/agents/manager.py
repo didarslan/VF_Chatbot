@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from vfa.services.intent_service import analyze_intent
 from vfa.services.state_store import get_state, set_state
 from vfa.services.slot_service import extract_slots
-from vfa.services.vector_store_factory import get_vectorstore
+from vfa.services.rag_service import RAGService
+from vfa.services.safety_service import looks_like_sensitive_request
 from vfa.tools.phone_catalog import find_device_url_in_candidates
 
 from vfa.agents.device_agent import DeviceAgent
@@ -34,8 +35,7 @@ class ManagerAgent:
 
     def __init__(self, composer: Optional[ResponseComposer] = None) -> None:
         self.device_agent = DeviceAgent()
-        vectorstore = get_vectorstore()
-        self.knowledge_agent = KnowledgeAgent(rag=vectorstore)
+        self.knowledge_agent = KnowledgeAgent(rag=RAGService())
         self.order_agent = OrderAgent()
         self.response_composer = composer or ResponseComposer()
         
@@ -55,7 +55,20 @@ class ManagerAgent:
                 "has_last_order": bool(s.get("last_order")),
             }
 
-        # 1) Slot update (user can provide these at any time)
+        # 1) Safety refusal for sensitive data requests
+        if looks_like_sensitive_request(message):
+            return ChatResponse(
+                answer="Bu isteğe yardımcı olamam. Kişisel veri paylaşımı yapamam.",
+                actions=[{"type": "REFUSE"}],
+                state=st,
+                debug={
+                    "route": "REFUSE",
+                    "reason": "sensitive_request",
+                    "state": _state_view(st),
+                },
+            )
+
+        # 2) Slot update (user can provide these at any time)
         slots = extract_slots(message)
 
         has_slot = bool(slots.get("installment") or slots.get("city") or slots.get("msisdn"))
@@ -72,7 +85,7 @@ class ManagerAgent:
         if updates:
             st = set_state(thread_id, **updates)
 
-        # 2) Intent analysis (LLM / heuristic)
+        # 3) Intent analysis (LLM / heuristic)
         intent = analyze_intent(message)
         msg_l = message.strip().lower()
 
@@ -162,10 +175,10 @@ class ManagerAgent:
         if intent.intent == "KNOWLEDGE_5G":
             ans = self.knowledge_agent.answer(message)
             return ChatResponse(
-                answer=ans,
+                answer=ans.get("answer", ""),
                 actions=[{"type": "ANSWER_5G"}],
                 state=st,
-                debug=dbg(action="ANSWER_5G", state=_state_view(st)),
+                debug=dbg(action="ANSWER_5G", state=_state_view(st), sources=ans.get("sources")),
             )
 
         if intent.intent == "DEVICE_DISCOVERY":
