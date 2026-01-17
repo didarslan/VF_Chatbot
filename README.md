@@ -105,3 +105,12 @@ python -m vfa.eval.run_eval --dataset src/vfa/eval/datasets/manual_eval.jsonl --
 - The eval runner loads `.env` automatically.
 - Chroma data persists in `data/` (configurable via `CHROMA_DIR`).
 - For judge settings, use `JUDGE_MODEL`, `JUDGE_TIMEOUT_S`, and `JUDGE_MAX_RETRIES`.
+
+License
+
+Add your license here (e.g., MIT) or state “All rights reserved” if internal.
+
+Contact
+
+Owner: Didar Arslanoğlu
+Repo: https://github.com/didarslan/VF_Chatbot
