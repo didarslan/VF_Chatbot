@@ -108,7 +108,7 @@ python -m vfa.eval.run_eval --dataset src/vfa/eval/datasets/manual_eval.jsonl --
 
 License
 
-Add your license here (e.g., MIT) or state “All rights reserved” if internal.
+Add your license here or state “All rights reserved” if internal.
 
 Contact
 
