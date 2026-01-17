@@ -1,0 +1,18 @@
+{
+  "n": 60,
+  "errors": 60,
+  "avg_latency_ms": 1883.6594766663136,
+  "p95_latency_ms": 2213.0727250070777,
+  "route_acc_avg": 0.0,
+  "action_acc_avg": 0.0,
+  "refusal_ok_avg": 0.8333333333333334,
+  "judge_overall_avg": null,
+  "judge_enabled": false,
+  "env": {
+    "EVAL_MODE": null,
+    "RAG_ENABLED": null,
+    "RAG_TOPK": null,
+    "JUDGE_MODEL": null
+  },
+  "out_dir": "C:\\Users\\ADA\\OneDrive\\Desktop\\vf-agentic-assistant\\VF_Chatbot\\src\\vfa\\eval\\results\\manual_nojudge"
+}

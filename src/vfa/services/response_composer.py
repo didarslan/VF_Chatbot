@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+from pyexpat.errors import messages
+from pyexpat.errors import messages
 from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+from vfa.services.llm_factory import make_chat_llm, paced_invoke
 
 
 class ResponseDraft(BaseModel):
@@ -17,7 +20,7 @@ class ResponseComposer:
         tone = os.getenv("ASSISTANT_TONE", "friendly")
         max_sent = int(os.getenv("ASSISTANT_MAX_SENTENCES", "3"))
 
-        self.llm = ChatOpenAI(model=model, temperature=0.6)
+        self.llm = make_chat_llm(model=model, temperature=0.6)
         self.max_sent = max_sent
         self.tone = tone
 
@@ -44,4 +47,5 @@ class ResponseComposer:
             "action": action,
             "data": data
         })
+        resp = paced_invoke(self.llm, messages)
         return out.answer.strip()

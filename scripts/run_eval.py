@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from vfa.agents.manager import ManagerAgent
-from vfa.eval.rubrics import simple_auto_metrics
+from vfa.eval.rubics import simple_auto_metrics
 
 
 DATASET = ROOT / "src" / "vfa" / "eval" / "datasets" / "manual_eval.jsonl"

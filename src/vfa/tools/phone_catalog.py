@@ -1,15 +1,15 @@
 from __future__ import annotations
 import re
-from typing import List, Optional
+from typing import List, Optional, Dict
+
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
-from typing import Dict
-from vfa.core.config import settings
+
 from vfa.core.schemas import ProductSummary
 from vfa.core.prompts import DEVICE_SYSTEM
 from vfa.services.scraper_service import fetch_html
 from vfa.services.parser_service import html_to_text
+from vfa.services.llm_factory import make_chat_llm, paced_invoke
 
 
 class _ExtractedProduct(BaseModel):
@@ -20,11 +20,8 @@ class _ExtractedProduct(BaseModel):
     is_5g: Optional[bool] = Field(None, description="5G sinyali")
 
 
-_llm = ChatOpenAI(
-    model=settings.openai_model,
-    temperature=0.0,
-    openai_api_key=settings.openai_api_key,
-)
+_llm = make_chat_llm(temperature=0.2)
+
 
 def _norm(s: str) -> str:
     s = s.lower()
@@ -32,13 +29,15 @@ def _norm(s: str) -> str:
     s = re.sub(r"[^\w\s]", "", s)  # noktalama temizle
     return s
 
+
 def find_device_url_in_candidates(model_text: str, candidates: List[Dict[str, str]]) -> Optional[str]:
     mt = _norm(model_text)
     for c in candidates:
-        name = _norm(c.get("name", ""))
+        name = _norm(c.get("name", "") or c.get("title", ""))
         if name and name in mt:
             return c.get("url")
     return None
+
 
 def discover_product_urls(catalog_url: str, limit: int = 50) -> List[str]:
     html = fetch_html(catalog_url)
@@ -57,11 +56,13 @@ def discover_product_urls(catalog_url: str, limit: int = 50) -> List[str]:
 
     return urls
 
+
 def _heuristic_is_5g(text: str) -> Optional[bool]:
     t = text.lower()
     if "5g" in t:
         return True
     return None
+
 
 def get_product_summary(product_url: str) -> ProductSummary:
     html = fetch_html(product_url)
@@ -75,7 +76,8 @@ Sayfa metni (kısaltılmış):
 {text[:14000]}
 
 Yapılandırılmış ürün özetini çıkar."""
-    p: _ExtractedProduct = structured.invoke(prompt)
+
+    p: _ExtractedProduct = paced_invoke(structured, prompt)
 
     if p.is_5g is None:
         p.is_5g = _heuristic_is_5g(text)
@@ -88,6 +90,7 @@ Yapılandırılmış ürün özetini çıkar."""
         installment_text=p.installment_text,
         highlights=p.highlights,
     )
+
 
 def compare_products(url_a: str, url_b: str) -> dict:
     a = get_product_summary(url_a)

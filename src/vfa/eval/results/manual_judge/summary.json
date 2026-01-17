@@ -1,0 +1,18 @@
+{
+  "n": 60,
+  "errors": 60,
+  "avg_latency_ms": 1896.0330383333105,
+  "p95_latency_ms": 2173.136169999634,
+  "route_acc_avg": 0.0,
+  "action_acc_avg": 0.0,
+  "refusal_ok_avg": 0.8333333333333334,
+  "judge_overall_avg": null,
+  "judge_enabled": true,
+  "env": {
+    "EVAL_MODE": null,
+    "RAG_ENABLED": null,
+    "RAG_TOPK": null,
+    "JUDGE_MODEL": null
+  },
+  "out_dir": "C:\\Users\\ADA\\OneDrive\\Desktop\\vf-agentic-assistant\\VF_Chatbot\\src\\vfa\\eval\\results\\manual_judge"
+}

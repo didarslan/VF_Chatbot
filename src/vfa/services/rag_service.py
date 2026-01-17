@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import List, Tuple
 from langchain_openai import ChatOpenAI
@@ -6,16 +6,12 @@ from langchain_core.documents import Document
 from vfa.core.config import settings
 from vfa.core.prompts import KNOWLEDGE_SYSTEM
 from vfa.services.vector_store_factory import get_vectorstore
-
+from vfa.services.llm_factory import make_chat_llm, paced_invoke
 
 class RAGService:
     def __init__(self):
         self.vs = get_vectorstore()
-        self.llm = ChatOpenAI(
-            model=settings.openai_model,
-            temperature=0.2,
-            openai_api_key=settings.openai_api_key,
-        )
+        self.llm = make_chat_llm(model=settings.model, temperature=0.6)
 
     def retrieve(self, query: str, k: int = 4) -> List[Document]:
         retriever = self.vs.as_retriever(search_kwargs={"k": k})
@@ -24,7 +20,7 @@ class RAGService:
     def answer(self, question: str) -> Tuple[str, List[str]]:
         docs = self.retrieve(question, k=4)
         if not docs:
-            return "Bu konuda bilgi sahibi değilim.", []
+            return "Bu konuda bilgi sahibi deÄŸilim.", []
 
         sources: List[str] = []
         ctx_parts = []
@@ -44,6 +40,7 @@ Context:
 Soru:
 {question}
 
-Yanıt:"""
-        resp = self.llm.invoke(prompt)
+YanÄ±t:"""
+        resp = paced_invoke(self.llm, prompt)
         return resp.content, sources
+

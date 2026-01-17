@@ -16,6 +16,7 @@ from vfa.agents.order_agent import OrderAgent
 from vfa.services.response_composer import ResponseComposer
 
 
+
 class ChatResponse(BaseModel):
     answer: str
     actions: List[Dict[str, Any]] = []
@@ -42,11 +43,23 @@ class ManagerAgent:
     def handle(self, thread_id: str, message: str) -> ChatResponse:
         st = get_state(thread_id)
 
+        def _state_view(s: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                "stage": s.get("stage"),
+                "selected_model": s.get("selected_model"),
+                "selected_url": s.get("selected_url"),
+                "installment": s.get("installment"),
+                "city": s.get("city"),
+                "msisdn": s.get("msisdn"),
+                "last_candidates_count": len(s.get("last_candidates", []) or []),
+                "has_last_order": bool(s.get("last_order")),
+            }
+
         # 1) Slot update (user can provide these at any time)
         slots = extract_slots(message)
 
         has_slot = bool(slots.get("installment") or slots.get("city") or slots.get("msisdn"))
-        slot_only = has_slot and len(message.strip()) <= 80 
+        slot_only = has_slot and len(message.strip()) <= 80
 
         updates: Dict[str, Any] = {}
         if slots.get("installment"):
@@ -62,15 +75,29 @@ class ManagerAgent:
         # 2) Intent analysis (LLM / heuristic)
         intent = analyze_intent(message)
         msg_l = message.strip().lower()
+
+        # Greeting shortcut
         if msg_l in {"merhaba","selam","selamlar","günaydın","iyi akşamlar","iyi geceler","hi","hello","hey"}:
             ans = self.response_composer.compose(
                 intent="GREETING",
                 action="GREET",
                 data={"capabilities": ["5G soruları", "5G uyumlu telefon önerisi", "faturaya ek sipariş oluşturma"]}
             )
-            return ChatResponse(answer=ans, actions=[{"type": "GREET"}], state=st, debug={"intent": intent.model_dump()})    
+            return ChatResponse(
+                answer=ans,
+                actions=[{"type": "GREET"}],
+                state=st,
+                debug={
+                    "intent": intent.model_dump(),
+                    "route": "GREETING",
+                    "action": "GREET",
+                    "slots": slots,
+                    "slot_only": slot_only,
+                    "state": _state_view(st),
+                },
+            )
 
-        # 3) State-aware intent override 
+        # 3) State-aware intent override
         msg_l = message.lower()
         orderish = any(k in msg_l for k in ["almak istiyorum", "satın", "sipariş", "faturaya ek", "order", "sepete"])
         matched_url = None
@@ -83,11 +110,33 @@ class ManagerAgent:
             intent.intent = "ORDER_CREATE"
 
         # ✅ Discovery->Selection override sadece gerçekten model seçiyorsa çalışsın
-        looks_like_model_pick = any(b in message.lower() for b in ["galaxy", "iphone", "xiaomi", "oppo", "huawei", "tecno", "infinix", "nubia", "realme", "vivo", "casper"])
+        looks_like_model_pick = any(
+            b in message.lower()
+            for b in ["galaxy", "iphone", "xiaomi", "oppo", "huawei", "tecno", "infinix", "nubia", "realme", "vivo", "casper"]
+        )
+
         if intent.intent == "DEVICE_DISCOVERY" and st.get("last_candidates"):
             if (matched_url or orderish) and looks_like_model_pick:
                 intent.intent = "DEVICE_SELECTION"
                 intent.selected_model = intent.selected_model or message
+
+        # Debug helper (tek yerden standartlaştır)
+        base_debug = {
+            "intent": intent.model_dump(),
+            "route": intent.intent,  # override sonrası final route
+            "slots": slots,
+            "slot_only": slot_only,
+            "orderish": orderish,
+            "matched_url": matched_url,
+            "looks_like_model_pick": looks_like_model_pick,
+            "state": _state_view(st),
+        }
+
+        def dbg(**extra: Any) -> Dict[str, Any]:
+            d = dict(base_debug)
+            # state değişmiş olabilir: çağıran branch güncel state'i override edebilir
+            d.update(extra)
+            return d
 
         # 4) Routing
         if intent.intent == "ORDER_HOWTO":
@@ -107,16 +156,16 @@ class ManagerAgent:
                 answer=ans,
                 actions=[{"type": "HOWTO_ORDER"}],
                 state=st,
-                debug={"intent": intent.model_dump()},
+                debug=dbg(action="EXPLAIN_ORDER_FLOW", state=_state_view(st)),
             )
 
         if intent.intent == "KNOWLEDGE_5G":
-            ans = self.knowledge_agent.answer(message, thread_id)
+            ans = self.knowledge_agent.answer(message)
             return ChatResponse(
                 answer=ans,
                 actions=[{"type": "ANSWER_5G"}],
                 state=st,
-                debug={"intent": intent.model_dump()},
+                debug=dbg(action="ANSWER_5G", state=_state_view(st)),
             )
 
         if intent.intent == "DEVICE_DISCOVERY":
@@ -126,7 +175,11 @@ class ManagerAgent:
                 answer=result["answer"],
                 actions=[{"type": "SHOW_CANDIDATES", "count": len(st.get("last_candidates", []))}],
                 state=st,
-                debug={"intent": intent.model_dump()},
+                debug=dbg(
+                    action="SHOW_CANDIDATES",
+                    state=_state_view(st),
+                    candidates_count=len(st.get("last_candidates", []) or []),
+                ),
             )
 
         if intent.intent in ["DEVICE_SELECTION", "ORDER_CREATE"]:
@@ -146,10 +199,11 @@ class ManagerAgent:
                     ),
                     actions=[{"type": "ASK_RESELECT"}],
                     state=st,
-                    debug={"intent": intent.model_dump(), "note": "url_not_found"},
+                    debug=dbg(action="ASK_RESELECT", note="url_not_found", state=_state_view(st)),
                 )
 
             st = set_state(thread_id, stage="SELECTION", selected_model=model, selected_url=url)
+
             if intent.intent == "DEVICE_SELECTION" and not looks_like_model_pick and not orderish and not slot_only:
                 return ChatResponse(
                     answer=(
@@ -158,7 +212,7 @@ class ManagerAgent:
                     ),
                     actions=[{"type": "CONFIRM_SELECTION", "selected_url": url}],
                     state=st,
-                    debug={"intent": intent.model_dump()},
+                    debug=dbg(action="CONFIRM_SELECTION", state=_state_view(st), resolved_url=url, resolved_model=model),
                 )
 
             # Missing slots for order
@@ -169,7 +223,8 @@ class ManagerAgent:
                 missing.append("Teslimat ili")
 
             if missing:
-                ans = self.composer.compose(
+                # ✅ FIX: self.composer yerine self.response_composer
+                ans = self.response_composer.compose(
                     intent=intent.intent,
                     action="ASK_SLOTS",
                     data={
@@ -183,14 +238,15 @@ class ManagerAgent:
                     answer=ans,
                     actions=[{"type": "ASK_SLOTS", "missing": missing}],
                     state=st,
-                    debug={"intent": intent.model_dump()}
+                    debug=dbg(action="ASK_SLOTS", missing=missing, state=_state_view(st)),
                 )
 
             # All set -> create order
             order_res = self.order_agent.create_order(thread_id=thread_id, state=st)
             st = set_state(thread_id, stage="ORDER", last_order=order_res)
 
-            ans = self.composer.compose(
+            # ✅ FIX: self.composer yerine self.response_composer
+            ans = self.response_composer.compose(
                 intent="ORDER_CREATE",
                 action="ORDER_CREATED",
                 data={
@@ -204,7 +260,7 @@ class ManagerAgent:
                 answer=ans,
                 actions=[{"type": "CREATE_ORDER", "order_id": order_res["order_id"]}],
                 state=st,
-                debug={"intent": intent.model_dump()}
+                debug=dbg(action="ORDER_CREATED", order_id=order_res["order_id"], state=_state_view(st)),
             )
 
         # Default
@@ -212,5 +268,6 @@ class ManagerAgent:
             answer="Daha iyi yardımcı olabilmem için biraz daha detay paylaşır mısınız?",
             actions=[{"type": "ASK_CLARIFY"}],
             state=st,
-            debug={"intent": intent.model_dump()},
+            debug=dbg(action="ASK_CLARIFY", state=_state_view(st)),
         )
+

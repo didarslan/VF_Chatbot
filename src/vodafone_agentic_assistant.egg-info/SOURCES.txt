@@ -14,8 +14,13 @@ src/vfa/core/constants.py
 src/vfa/core/logging.py
 src/vfa/core/prompts.py
 src/vfa/core/schemas.py
+src/vfa/eval/__init__.py
+src/vfa/eval/make_report.py
 src/vfa/eval/metrics.py
 src/vfa/eval/rubics.py
+src/vfa/eval/run_eval.py
+src/vfa/eval/run_suite.py
+src/vfa/eval/seed_datasets.py
 src/vfa/services/ingestion_service.py
 src/vfa/services/intent_service.py
 src/vfa/services/parser_service.py
