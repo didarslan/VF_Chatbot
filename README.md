@@ -6,8 +6,6 @@ A telecom-focused agentic assistant that behaves like a **5G domain expert**:
 - Creates installment-based orders by interacting with backend systems  
 - Provides an evaluation pipeline with metrics + optional LLM-as-a-judge scoring
 
-Repo: https://github.com/didarslan/VF_Chatbot
-
 ---
 
 ## Key Features
@@ -113,4 +111,5 @@ Add your license here or state “All rights reserved” if internal.
 Contact
 
 Owner: Didar Arslanoğlu
+
 Repo: https://github.com/didarslan/VF_Chatbot
